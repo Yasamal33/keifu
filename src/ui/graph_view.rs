@@ -691,4 +691,9 @@ mod tests {
         assert!(result[0].0.starts_with('('));
         assert!(result[0].0.ends_with(')'));
     }
+
+    #[test]
+    fn abbreviate_ref_label_places_suffix_inside_brackets() {
+        assert_eq!(abbreviate_ref_label("main", 40, 2, '[', ']'), "[main +2]");
+    }
 }

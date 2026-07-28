@@ -34,6 +34,16 @@ show_remote_branches = false
 
 TUI 上では `o` キーでリモートブランチ表示を切り替えられます。
 
+デフォルトでは、keifu はコミットにタグラベルを表示します。初期状態で非表示にしたい場合は、次のように設定できます。
+
+```toml
+[graph]
+# タグラベルをデフォルトで表示する（デフォルト: true）
+show_tags = false
+```
+
+TUI 上では `t` キーでタグ表示を切り替えられます。
+
 ### オプション一覧
 
 | キー | 型 | デフォルト | 説明 |
@@ -43,6 +53,7 @@ TUI 上では `o` キーでリモートブランチ表示を切り替えられ�
 | `auto_fetch` | bool | `true` | origin からの自動 fetch を有効にする |
 | `fetch_interval` | integer | `60` | リモート fetch の間隔（秒）（最小: 10） |
 | `graph.show_remote_branches` | bool | `true` | リモートブランチと、リモートブランチからのみ到達可能なコミットを表示する |
+| `graph.show_tags` | bool | `true` | コミットにタグラベルを表示する |
 
 ### 自動更新を無効にする
 
