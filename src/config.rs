@@ -18,12 +18,15 @@ pub struct Config {
 pub struct GraphConfig {
     /// Show remote branches and commits only reachable from remote branches
     pub show_remote_branches: bool,
+    /// Show tag labels on commits
+    pub show_tags: bool,
 }
 
 impl Default for GraphConfig {
     fn default() -> Self {
         Self {
             show_remote_branches: true,
+            show_tags: true,
         }
     }
 }

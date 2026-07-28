@@ -93,6 +93,7 @@ fn map_normal_mode(key: KeyEvent) -> Option<Action> {
         (_, KeyCode::Char('/')) => Some(Action::Search),
         (KeyModifiers::SHIFT, KeyCode::Char('R')) => Some(Action::Refresh),
         (KeyModifiers::NONE, KeyCode::Char('o')) => Some(Action::ToggleRemoteBranches),
+        (KeyModifiers::NONE, KeyCode::Char('t')) => Some(Action::ToggleTags),
         (_, KeyCode::Char('?')) => Some(Action::ToggleHelp),
         (KeyModifiers::NONE, KeyCode::Char('q')) | (KeyModifiers::NONE, KeyCode::Esc) => {
             Some(Action::Quit)

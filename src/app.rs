@@ -24,7 +24,7 @@ use crate::{
             stage_path, unstage_all, unstage_path,
         },
         BranchInfo, CommitDiffInfo, CommitInfo, FileDiffContent, FileDiffInfo, GitRepository,
-        StageState, WorkingTreeStatus,
+        StageState, TagInfo, WorkingTreeStatus,
     },
     perf::PerfStats,
     search::{fuzzy_search_branches, FuzzySearchResult},
@@ -209,8 +209,10 @@ pub struct App {
     // Data
     pub commits: Vec<CommitInfo>,
     pub branches: Vec<BranchInfo>,
+    pub tags: Vec<TagInfo>,
     pub graph_layout: GraphLayout,
     show_remote_branches: bool,
+    show_tags: bool,
 
     // UI state
     pub graph_list_state: ListState,
@@ -323,8 +325,10 @@ impl App {
         let head_name = repo.head_name();
 
         let show_remote_branches = config.graph.show_remote_branches;
+        let show_tags = config.graph.show_tags;
         let commits = repo.get_commits(500, show_remote_branches)?;
         let branches = repo.get_branches(show_remote_branches)?;
+        let tags = repo.get_tags()?;
         let (working_tree_status, stage_states, initial_message) =
             Self::working_tree_snapshot(&repo);
         let initial_message_time = initial_message.as_ref().map(|_| now);
@@ -332,7 +336,14 @@ impl App {
             .as_ref()
             .map(|s| s.accurate_file_count());
         let head_commit_oid = repo.head_oid();
-        let graph_layout = build_graph(&commits, &branches, uncommitted_count, head_commit_oid);
+        let tag_refs: &[TagInfo] = if show_tags { &tags } else { &[] };
+        let graph_layout = build_graph(
+            &commits,
+            &branches,
+            tag_refs,
+            uncommitted_count,
+            head_commit_oid,
+        );
 
         let mut graph_list_state = ListState::default();
         graph_list_state.select(Some(0));
@@ -360,8 +371,10 @@ impl App {
             head_name,
             commits,
             branches,
+            tags,
             graph_layout,
             show_remote_branches,
+            show_tags,
             graph_list_state,
             focused_pane: FocusedPane::default(),
             detail_scroll: 0,
@@ -553,12 +566,15 @@ impl App {
         let log_started = Instant::now();
         self.commits = self.repo.get_commits(500, self.show_remote_branches)?;
         self.branches = self.repo.get_branches(self.show_remote_branches)?;
+        self.tags = self.repo.get_tags()?;
         self.perf.record("refresh.log", log_started.elapsed());
         let head_commit_oid = self.repo.head_oid();
         let graph_started = Instant::now();
+        let tag_refs: &[TagInfo] = if self.show_tags { &self.tags } else { &[] };
         self.graph_layout = build_graph(
             &self.commits,
             &self.branches,
+            tag_refs,
             uncommitted_count,
             head_commit_oid,
         );
@@ -1183,6 +1199,25 @@ impl App {
                     "hidden"
                 };
                 self.set_message(format!("Remote branches {state}"));
+            }
+            Action::ToggleTags => {
+                self.show_tags = !self.show_tags;
+                let tag_refs: &[TagInfo] = if self.show_tags { &self.tags } else { &[] };
+                let uncommitted_count = self
+                    .working_tree_status
+                    .as_ref()
+                    .map(|s| s.accurate_file_count());
+                let head_commit_oid = self.repo.head_oid();
+                self.graph_layout = build_graph(
+                    &self.commits,
+                    &self.branches,
+                    tag_refs,
+                    uncommitted_count,
+                    head_commit_oid,
+                );
+                self.branch_positions = Self::build_branch_positions(&self.graph_layout);
+                let state = if self.show_tags { "shown" } else { "hidden" };
+                self.set_message(format!("Tags {state}"));
             }
             Action::Fetch if !self.is_fetching() => {
                 self.start_fetch(true, false); // silent=false for manual fetch
@@ -2170,8 +2205,10 @@ mod tests {
     fn make_app_from_repo(repo: GitRepository) -> App {
         let now = Instant::now();
         let show_remote_branches = true;
+        let show_tags = true;
         let commits = repo.get_commits(500, show_remote_branches).unwrap();
         let branches = repo.get_branches(show_remote_branches).unwrap();
+        let tags = repo.get_tags().unwrap();
         let (working_tree_status, stage_states, initial_message) =
             App::working_tree_snapshot(&repo);
         let initial_message_time = initial_message.as_ref().map(|_| now);
@@ -2179,7 +2216,14 @@ mod tests {
             .as_ref()
             .map(|s| s.accurate_file_count());
         let head_commit_oid = repo.head_oid();
-        let graph_layout = build_graph(&commits, &branches, uncommitted_count, head_commit_oid);
+        let tag_refs: &[TagInfo] = if show_tags { &tags } else { &[] };
+        let graph_layout = build_graph(
+            &commits,
+            &branches,
+            tag_refs,
+            uncommitted_count,
+            head_commit_oid,
+        );
 
         let mut graph_list_state = ListState::default();
         graph_list_state.select(Some(0));
@@ -2202,8 +2246,10 @@ mod tests {
             head_name: None,
             commits,
             branches,
+            tags,
             graph_layout,
             show_remote_branches,
+            show_tags,
             graph_list_state,
             focused_pane: FocusedPane::default(),
             detail_scroll: 0,
@@ -2277,11 +2323,13 @@ mod tests {
             head_name: None,
             commits,
             branches: Vec::new(),
+            tags: Vec::new(),
             graph_layout: GraphLayout {
                 nodes: vec![node],
                 max_lane: 0,
             },
             show_remote_branches: true,
+            show_tags: true,
             graph_list_state,
             focused_pane: FocusedPane::default(),
             detail_scroll: 0,
@@ -2330,6 +2378,7 @@ mod tests {
             lane: 0,
             color_index: 0,
             branch_names: Vec::new(),
+            tag_names: Vec::new(),
             is_head: false,
             is_uncommitted: false,
             uncommitted_count: None,
@@ -2346,6 +2395,7 @@ mod tests {
             lane: 0,
             color_index: 0,
             branch_names: Vec::new(),
+            tag_names: Vec::new(),
             is_head: false,
             is_uncommitted: true,
             uncommitted_count: Some(1),
@@ -2422,6 +2472,33 @@ mod tests {
         assert!(!app.uncommitted_diff_loading);
         assert!(app.uncommitted_diff_receiver.is_none());
         assert_eq!(app.message.as_deref(), Some("Failed to load diff: boom"));
+    }
+
+    #[test]
+    fn toggle_tags_hides_and_shows_tag_labels() {
+        let (_tempdir, repo) = init_repo();
+        let oid = commit_file(&repo.repo, "a.txt", "a\n", "init");
+        let target = repo.repo.find_object(oid, None).unwrap();
+        repo.repo.tag_lightweight("v1.0.0", &target, false).unwrap();
+        drop(target);
+
+        let mut app = make_app_from_repo(repo);
+        assert!(app.show_tags);
+        assert_eq!(
+            app.graph_layout.nodes[0].tag_names,
+            vec!["v1.0.0".to_string()]
+        );
+
+        app.handle_action(Action::ToggleTags).unwrap();
+        assert!(!app.show_tags);
+        assert!(app.graph_layout.nodes[0].tag_names.is_empty());
+
+        app.handle_action(Action::ToggleTags).unwrap();
+        assert!(app.show_tags);
+        assert_eq!(
+            app.graph_layout.nodes[0].tag_names,
+            vec!["v1.0.0".to_string()]
+        );
     }
 
     #[test]
