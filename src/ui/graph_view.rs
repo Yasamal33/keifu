@@ -190,7 +190,7 @@ fn optimize_branch_display(
             return label;
         }
 
-        let abbrev = abbreviate_branch_label(name, abbrev_width, 0);
+        let abbrev = abbreviate_ref_label(name, abbrev_width, 0, '[', ']');
         if let Some(s) = suffix {
             abbrev.replace(']', &format!(" {}]", s))
         } else {
@@ -237,7 +237,8 @@ fn optimize_branch_display(
             .split([']', ' '])
             .next()
             .unwrap_or(label);
-        let abbreviated = abbreviate_branch_label(clean_name, MAX_LABEL_WIDTH, result.len() - 1);
+        let abbreviated =
+            abbreviate_ref_label(clean_name, MAX_LABEL_WIDTH, result.len() - 1, '[', ']');
 
         return vec![(abbreviated, *style)];
     }
@@ -295,9 +296,17 @@ fn compute_right_side_visibility(remaining_for_content: usize) -> (bool, bool, b
     }
 }
 
-/// Abbreviate branch name to max_width, showing "+N" if more branches exist
-/// Uses format: prefix/head...tail (preserving last 5 chars)
-fn abbreviate_branch_label(name: &str, max_width: usize, extra_count: usize) -> String {
+/// Abbreviate a ref name to max_width, showing "+N" if more refs exist.
+/// Uses format: prefix/head...tail (preserving last 5 chars), wrapped in
+/// the given open/close bracket characters (e.g. '[' ']' for branches,
+/// '(' ')' for tags).
+fn abbreviate_ref_label(
+    name: &str,
+    max_width: usize,
+    extra_count: usize,
+    open: char,
+    close: char,
+) -> String {
     const TAIL_LEN: usize = 5;
     const ELLIPSIS: &str = "...";
 
@@ -312,7 +321,7 @@ fn abbreviate_branch_label(name: &str, max_width: usize, extra_count: usize) -> 
 
     // If name fits, return as-is
     if display_width(name) <= available {
-        return format!("[{}]{}", name, suffix);
+        return format!("{}{}{}{}", open, name, suffix, close);
     }
 
     // Find "/" position to preserve prefix
@@ -342,12 +351,58 @@ fn abbreviate_branch_label(name: &str, max_width: usize, extra_count: usize) -> 
     if head_available == 0 {
         // Not enough space for head, just show truncated name
         let truncated = truncate_to_width(name, available.saturating_sub(3));
-        return format!("[{}...]{}", truncated, suffix);
+        return format!("{}{}...{}{}", open, truncated, suffix, close);
     }
 
     let head = truncate_to_width(rest, head_available);
 
-    format!("[{}{}{}{}]{}", prefix, head, ELLIPSIS, tail, suffix)
+    format!(
+        "{}{}{}{}{}{}{}",
+        open, prefix, head, ELLIPSIS, tail, suffix, close
+    )
+}
+
+/// Optimize tag name display
+/// - Render each tag wrapped in parentheses, in a fixed color distinct
+///   from branch colors
+/// - Collapse multiple tags on one commit to a single "(name +N)" label
+/// - Tags have no selection/navigation state of their own; only row
+///   selection background inversion applies, same as branch labels
+fn optimize_tag_display(tag_names: &[String], is_row_selected: bool) -> Vec<(String, Style)> {
+    if tag_names.is_empty() {
+        return Vec::new();
+    }
+
+    // Max width for a single tag label (e.g., "(release-2024.01.01)")
+    const MAX_LABEL_WIDTH: usize = 40;
+    const TAG_COLOR: Color = Color::Yellow;
+
+    let style = with_row_selection(
+        Style::default().fg(TAG_COLOR).add_modifier(Modifier::BOLD),
+        is_row_selected,
+    );
+
+    if tag_names.len() > 1 {
+        let label = abbreviate_ref_label(
+            &tag_names[0],
+            MAX_LABEL_WIDTH,
+            tag_names.len() - 1,
+            '(',
+            ')',
+        );
+        return vec![(label, style)];
+    }
+
+    let name = &tag_names[0];
+    let label = format!("({})", name);
+    if display_width(&label) <= MAX_LABEL_WIDTH {
+        return vec![(label, style)];
+    }
+
+    vec![(
+        abbreviate_ref_label(name, MAX_LABEL_WIDTH, 0, '(', ')'),
+        style,
+    )]
 }
 
 fn render_graph_line<'a>(
@@ -490,6 +545,9 @@ fn render_graph_line<'a>(
         is_selected,
     );
 
+    // Optimize tag names (collapse multiple tags on one commit)
+    let tag_display = optimize_tag_display(&node.tag_names, is_selected);
+
     // === Right-aligned: date author hash (fixed width) ===
     let date = commit.timestamp.format("%Y-%m-%d").to_string(); // 10 chars
     let author = truncate_to_width(&commit.author_name, 8);
@@ -504,6 +562,13 @@ fn render_graph_line<'a>(
         .map(|(i, (label, _))| display_width(label) + if i > 0 { 1 } else { 0 })
         .sum::<usize>()
         + if !branch_display.is_empty() { 1 } else { 0 };
+
+    // Calculate tag width (rendered directly after branch labels)
+    let tag_width: usize = tag_display
+        .iter()
+        .map(|(label, _)| display_width(label))
+        .sum::<usize>()
+        + if !tag_display.is_empty() { 1 } else { 0 };
 
     // Calculate remaining space for branch + message + right info
     let graph_width = left_width;
@@ -527,9 +592,20 @@ fn render_graph_line<'a>(
         left_width += 1;
     }
 
-    // Compute max message width (remaining space after branch and right side)
+    // Render tag label (optimize_tag_display always collapses to 0 or 1 entries)
+    for (label, style) in &tag_display {
+        left_width += display_width(label);
+        spans.push(Span::styled(label.clone(), *style));
+    }
+    if !tag_display.is_empty() {
+        spans.push(row_space(1, is_selected));
+        left_width += 1;
+    }
+
+    // Compute max message width (remaining space after branch, tags, and right side)
     let available_for_message = remaining_for_content
         .saturating_sub(branch_width)
+        .saturating_sub(tag_width)
         .saturating_sub(right_width);
     let message = truncate_to_width(&commit.message, available_for_message);
     let message_width = display_width(&message);
@@ -579,5 +655,40 @@ impl<'a> StatefulWidget for GraphViewWidget<'a> {
         let list = List::new(self.items).block(block);
 
         StatefulWidget::render(list, area, buf, state);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn optimize_tag_display_returns_empty_for_no_tags() {
+        assert!(optimize_tag_display(&[], false).is_empty());
+    }
+
+    #[test]
+    fn optimize_tag_display_wraps_single_tag_in_parens() {
+        let result = optimize_tag_display(&["v1.0.0".to_string()], false);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].0, "(v1.0.0)");
+    }
+
+    #[test]
+    fn optimize_tag_display_collapses_multiple_tags_with_count() {
+        let names = vec!["v1.0.0".to_string(), "v1.1.0".to_string()];
+        let result = optimize_tag_display(&names, false);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].0, "(v1.0.0 +1)");
+    }
+
+    #[test]
+    fn optimize_tag_display_abbreviates_long_tag_name() {
+        let long_name = "a-very-very-very-long-release-tag-name-2024".to_string();
+        let result = optimize_tag_display(&[long_name], false);
+        assert_eq!(result.len(), 1);
+        assert!(result[0].0.len() <= 40);
+        assert!(result[0].0.starts_with('('));
+        assert!(result[0].0.ends_with(')'));
     }
 }

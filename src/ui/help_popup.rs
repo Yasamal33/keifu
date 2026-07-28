@@ -85,6 +85,10 @@ fn help_lines() -> Vec<Line<'static>> {
             Span::styled("  o          ", key_style),
             Span::styled("Toggle remote branches", desc_style),
         ]),
+        Line::from(vec![
+            Span::styled("  t          ", key_style),
+            Span::styled("Toggle tags", desc_style),
+        ]),
         Line::from(""),
         Line::from(Span::styled("Git Operations", header_style)),
         Line::from(vec![
