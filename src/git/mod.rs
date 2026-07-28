@@ -8,7 +8,7 @@ pub mod graph;
 pub mod operations;
 pub mod repository;
 
-pub use branch::BranchInfo;
+pub use branch::{BranchInfo, TagInfo};
 pub use commit::CommitInfo;
 pub use diff::{
     CommitDiffInfo, DiffHunkContent, DiffLineContent, DiffLineOrigin, FileChangeKind,
