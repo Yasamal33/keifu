@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use git2::Oid;
 
-use super::{BranchInfo, CommitInfo};
+use super::{BranchInfo, CommitInfo, TagInfo};
 use crate::graph::colors::{ColorAssigner, UNCOMMITTED_COLOR_INDEX};
 
 /// Graph node
@@ -18,6 +18,8 @@ pub struct GraphNode {
     pub color_index: usize,
     /// Branch names pointing to this commit
     pub branch_names: Vec<String>,
+    /// Tag names pointing to this commit
+    pub tag_names: Vec<String>,
     /// Whether HEAD points to this commit
     pub is_head: bool,
     /// Whether this is an uncommitted changes node
@@ -73,6 +75,7 @@ pub struct GraphLayout {
 pub fn build_graph(
     commits: &[CommitInfo],
     branches: &[BranchInfo],
+    tags: &[TagInfo],
     uncommitted_count: Option<Option<usize>>,
     head_commit_oid: Option<Oid>,
 ) -> GraphLayout {
@@ -84,6 +87,7 @@ pub fn build_graph(
                     lane: 0,
                     color_index: UNCOMMITTED_COLOR_INDEX,
                     branch_names: Vec::new(),
+                    tag_names: Vec::new(),
                     is_head: false,
                     is_uncommitted: true,
                     uncommitted_count: count,
@@ -110,6 +114,15 @@ pub fn build_graph(
         if branch.is_head {
             head_oid = Some(branch.tip_oid);
         }
+    }
+
+    // OID -> tag name mapping
+    let mut oid_to_tags: HashMap<Oid, Vec<String>> = HashMap::new();
+    for tag in tags {
+        oid_to_tags
+            .entry(tag.tip_oid)
+            .or_default()
+            .push(tag.name.clone());
     }
 
     // OID -> row index mapping
@@ -227,6 +240,7 @@ pub fn build_graph(
                 lane: main_lane,
                 color_index: main_color,
                 branch_names: Vec::new(),
+                tag_names: Vec::new(),
                 is_head: false,
                 is_uncommitted: false,
                 uncommitted_count: None,
@@ -382,11 +396,12 @@ pub fn build_graph(
             max_lane,
         );
 
-        // Get branch names
+        // Get branch and tag names
         let branch_names = oid_to_branches
             .get(&commit.oid)
             .cloned()
             .unwrap_or_default();
+        let tag_names = oid_to_tags.get(&commit.oid).cloned().unwrap_or_default();
 
         let is_head = head_oid.map(|h| h == commit.oid).unwrap_or(false);
 
@@ -396,6 +411,7 @@ pub fn build_graph(
             lane,
             color_index: final_color_index,
             branch_names,
+            tag_names,
             is_head,
             is_uncommitted: false,
             uncommitted_count: None,
@@ -558,6 +574,7 @@ pub fn build_graph(
                     lane: uncommitted_lane,
                     color_index: UNCOMMITTED_COLOR_INDEX,
                     branch_names: Vec::new(),
+                    tag_names: Vec::new(),
                     is_head: false,
                     is_uncommitted: true,
                     uncommitted_count: count,
@@ -749,4 +766,59 @@ fn build_fork_connector_cells(
     }
 
     cells
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::Local;
+
+    use super::*;
+    use crate::git::CommitInfo;
+
+    fn make_commit(oid: Oid) -> CommitInfo {
+        CommitInfo {
+            oid,
+            short_id: oid.to_string()[..7].to_string(),
+            author_name: "Test".to_string(),
+            author_email: "test@example.com".to_string(),
+            timestamp: Local::now(),
+            message: "msg".to_string(),
+            full_message: "msg".to_string(),
+            parent_oids: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn build_graph_populates_tag_names_for_matching_commit() {
+        let oid = Oid::from_str("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").unwrap();
+        let commits = vec![make_commit(oid)];
+        let tags = vec![
+            TagInfo {
+                name: "v1.0.0".to_string(),
+                tip_oid: oid,
+            },
+            TagInfo {
+                name: "v1.1.0".to_string(),
+                tip_oid: oid,
+            },
+        ];
+
+        let layout = build_graph(&commits, &[], &tags, None, None);
+
+        assert_eq!(layout.nodes.len(), 1);
+        assert_eq!(
+            layout.nodes[0].tag_names,
+            vec!["v1.0.0".to_string(), "v1.1.0".to_string()]
+        );
+    }
+
+    #[test]
+    fn build_graph_leaves_tag_names_empty_for_untagged_commit() {
+        let oid = Oid::from_str("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb").unwrap();
+        let commits = vec![make_commit(oid)];
+
+        let layout = build_graph(&commits, &[], &[], None, None);
+
+        assert!(layout.nodes[0].tag_names.is_empty());
+    }
 }
