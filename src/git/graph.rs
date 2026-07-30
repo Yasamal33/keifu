@@ -18,7 +18,6 @@ pub struct GraphNode {
     pub color_index: usize,
     /// Branch names pointing to this commit
     pub branch_names: Vec<String>,
-    /// Tag names pointing to this commit
     pub tag_names: Vec<String>,
     /// Whether HEAD points to this commit
     pub is_head: bool,
@@ -116,7 +115,6 @@ pub fn build_graph(
         }
     }
 
-    // OID -> tag name mapping
     let mut oid_to_tags: HashMap<Oid, Vec<String>> = HashMap::new();
     for tag in tags {
         oid_to_tags
@@ -396,7 +394,6 @@ pub fn build_graph(
             max_lane,
         );
 
-        // Get branch and tag names
         let branch_names = oid_to_branches
             .get(&commit.oid)
             .cloned()

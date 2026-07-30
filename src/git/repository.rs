@@ -90,7 +90,6 @@ impl GitRepository {
         BranchInfo::list_all(&self.repo, include_remotes)
     }
 
-    /// Get tag list, resolved to the commit each tag points at
     pub fn get_tags(&self) -> Result<Vec<TagInfo>> {
         TagInfo::list_all(&self.repo)
     }

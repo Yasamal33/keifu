@@ -1,5 +1,3 @@
-//! Tag info structure and operations
-
 use anyhow::Result;
 use git2::{Oid, Repository};
 
@@ -10,10 +8,6 @@ pub struct TagInfo {
 }
 
 impl TagInfo {
-    /// List all tags in the repository, resolved to the commit they point
-    /// at. Both annotated tags (which point to a tag object) and
-    /// lightweight tags (which point directly to a commit) are peeled to
-    /// their target commit and treated identically here.
     pub fn list_all(repo: &Repository) -> Result<Vec<Self>> {
         let mut tags = Vec::new();
 

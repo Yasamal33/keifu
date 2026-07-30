@@ -1202,20 +1202,8 @@ impl App {
             }
             Action::ToggleTags => {
                 self.show_tags = !self.show_tags;
-                let tag_refs: &[TagInfo] = if self.show_tags { &self.tags } else { &[] };
-                let uncommitted_count = self
-                    .working_tree_status
-                    .as_ref()
-                    .map(|s| s.accurate_file_count());
-                let head_commit_oid = self.repo.head_oid();
-                self.graph_layout = build_graph(
-                    &self.commits,
-                    &self.branches,
-                    tag_refs,
-                    uncommitted_count,
-                    head_commit_oid,
-                );
-                self.branch_positions = Self::build_branch_positions(&self.graph_layout);
+                self.refresh(false)?;
+                self.reset_timers();
                 let state = if self.show_tags { "shown" } else { "hidden" };
                 self.set_message(format!("Tags {state}"));
             }
@@ -2499,6 +2487,23 @@ mod tests {
             app.graph_layout.nodes[0].tag_names,
             vec!["v1.0.0".to_string()]
         );
+    }
+
+    #[test]
+    fn toggle_tags_refreshes_external_head_changes() {
+        let (_tempdir, repo) = init_repo();
+        commit_file(&repo.repo, "tracked.txt", "tracked\n", "initial");
+        fs::write(repo.repo.workdir().unwrap().join("dirty.txt"), "dirty\n").unwrap();
+
+        let mut app = make_app_from_repo(repo);
+        assert!(app.graph_layout.nodes[0].is_uncommitted);
+
+        let new_oid = commit_file(&app.repo.repo, "next.txt", "next\n", "next");
+        app.handle_action(Action::ToggleTags).unwrap();
+
+        assert!(app.commits.iter().any(|commit| commit.oid == new_oid));
+        assert!(app.graph_layout.nodes[0].is_uncommitted);
+        assert!(app.graph_list_state.selected().unwrap() < app.graph_layout.nodes.len());
     }
 
     #[test]
