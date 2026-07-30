@@ -1,15 +1,22 @@
 //! keifu: a TUI tool that shows Git commit graphs
 
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use clap::Parser;
 use crossterm::event::Event;
 
 use keifu::{
-    app::App, debug_server, event::poll_events, git::configure_git_extensions,
-    keybindings::map_key_to_action, logging, mouse, tui, ui,
+    app::App,
+    debug_server,
+    event::{EventReader, InputEvent},
+    git::configure_git_extensions,
+    keybindings::map_key_to_action,
+    logging, mouse, tui, ui,
 };
+
+const MAINTENANCE_IDLE_PERIOD: Duration = Duration::from_millis(250);
 
 #[derive(Parser)]
 #[command(name = "keifu")]
@@ -53,6 +60,14 @@ fn main() -> Result<()> {
 
     // Initialize terminal
     let mut terminal = tui::init()?;
+    let mut event_reader = match EventReader::new() {
+        Ok(reader) => reader,
+        Err(error) => {
+            let _ = tui::restore();
+            return Err(error);
+        }
+    };
+    let mut last_user_input = Instant::now();
 
     // Main loop
     loop {
@@ -63,25 +78,27 @@ fn main() -> Result<()> {
         })?;
         app.perf.record("draw", draw_started.elapsed());
 
-        // Check if async fetch/push has completed
-        app.update_fetch_status();
-        app.update_push_status();
-
-        // Auto-refresh check
-        app.check_auto_refresh();
-
         // Exit check
         if app.should_quit {
             break;
         }
 
         // Process all queued events before the next render
-        let events = poll_events()?;
+        let batch = event_reader.poll_events()?;
+        if batch.had_input() {
+            last_user_input = Instant::now();
+        }
+        let raw_count = batch.raw_count();
+        let retained_count = batch.retained_count();
+        let events = batch.into_events();
+        if raw_count > 0 || retained_count > 0 {
+            tracing::trace!(raw_count, retained_count, "input batch normalized");
+        }
         if !events.is_empty() {
             let events_started = std::time::Instant::now();
             for event in events {
                 match event {
-                    Event::Key(key) => {
+                    InputEvent::Terminal(Event::Key(key)) => {
                         if let Some(action) = map_key_to_action(key, &app.mode) {
                             if let Err(e) = app.handle_action(action) {
                                 // Show errors in the UI
@@ -89,9 +106,13 @@ fn main() -> Result<()> {
                             }
                         }
                     }
-                    Event::Mouse(mouse_event) => {
+                    InputEvent::Terminal(Event::Mouse(mouse_event)) => {
                         mouse::handle_mouse(&mut app, mouse_event);
                     }
+                    InputEvent::Scroll {
+                        mouse: mouse_event,
+                        steps,
+                    } => mouse::handle_scroll(&mut app, mouse_event, steps),
                     // Resize events trigger redraw automatically
                     _ => {}
                 }
@@ -114,6 +135,15 @@ fn main() -> Result<()> {
                 );
                 let _ = command.reply.send(response);
             }
+        }
+
+        let allow_repository_refresh = last_user_input.elapsed() >= MAINTENANCE_IDLE_PERIOD;
+        app.update_fetch_status(allow_repository_refresh);
+        app.update_push_status(allow_repository_refresh);
+        // Repository refreshes are synchronous, so they must not compete with
+        // an active input gesture for the UI thread.
+        if allow_repository_refresh {
+            app.check_auto_refresh();
         }
     }
 

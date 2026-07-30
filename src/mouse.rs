@@ -18,11 +18,20 @@ const DOUBLE_CLICK_WINDOW: Duration = Duration::from_millis(400);
 
 pub fn handle_mouse(app: &mut App, event: MouseEvent) {
     match event.kind {
-        MouseEventKind::ScrollDown => handle_scroll(app, 1, event.column, event.row),
-        MouseEventKind::ScrollUp => handle_scroll(app, -1, event.column, event.row),
+        MouseEventKind::ScrollDown | MouseEventKind::ScrollUp => handle_scroll(app, event, 1),
         MouseEventKind::Down(MouseButton::Left) => handle_click(app, event.column, event.row),
         _ => {}
     }
+}
+
+pub fn handle_scroll(app: &mut App, event: MouseEvent, steps: usize) {
+    let steps = i32::try_from(steps).unwrap_or(i32::MAX);
+    let delta = match event.kind {
+        MouseEventKind::ScrollDown => steps,
+        MouseEventKind::ScrollUp => -steps,
+        _ => return,
+    };
+    handle_scroll_delta(app, delta, event.column, event.row);
 }
 
 fn dispatch(app: &mut App, action: Action) {
@@ -42,39 +51,52 @@ fn inner_row(rect: Rect, y: u16) -> Option<u16> {
     (y >= top && y < bottom).then(|| y - top)
 }
 
-fn handle_scroll(app: &mut App, delta: i32, x: u16, y: u16) {
+fn offset_index(current: usize, max: usize, delta: i32) -> usize {
+    if delta >= 0 {
+        current.saturating_add(delta as usize).min(max)
+    } else {
+        current.saturating_sub(delta.unsigned_abs() as usize)
+    }
+}
+
+fn handle_scroll_delta(app: &mut App, delta: i32, x: u16, y: u16) {
     match &app.mode {
         AppMode::FileDiff { .. } => {
-            let action = if delta > 0 {
-                Action::ScrollDown
-            } else {
-                Action::ScrollUp
+            let viewport = app.diff_viewport_height as usize;
+            let AppMode::FileDiff {
+                total_lines,
+                scroll_offset,
+                ..
+            } = &mut app.mode
+            else {
+                return;
             };
-            // Diff view: 3x scroll speed
-            for _ in 0..3 {
-                dispatch(app, action.clone());
-            }
+            let max_scroll = total_lines.saturating_sub(viewport);
+            *scroll_offset = offset_index(*scroll_offset, max_scroll, delta.saturating_mul(3));
         }
         AppMode::Help => {
-            let action = if delta > 0 {
-                Action::ScrollDown
+            if delta >= 0 {
+                app.help_scroll = app
+                    .help_scroll
+                    .saturating_add(u16::try_from(delta).unwrap_or(u16::MAX));
             } else {
-                Action::ScrollUp
-            };
-            dispatch(app, action);
+                app.help_scroll = app
+                    .help_scroll
+                    .saturating_sub(u16::try_from(delta.unsigned_abs()).unwrap_or(u16::MAX));
+            }
         }
         AppMode::Normal | AppMode::FileSelect { .. } => {
             let layout = app.layout;
             if contains(layout.commit_detail, x, y) {
                 app.scroll_detail(delta);
             } else if contains(layout.files, x, y) {
-                if matches!(app.mode, AppMode::FileSelect { .. }) {
-                    let action = if delta > 0 {
-                        Action::FileSelectDown
-                    } else {
-                        Action::FileSelectUp
-                    };
-                    dispatch(app, action);
+                if let AppMode::FileSelect {
+                    selected_index,
+                    file_list,
+                } = &mut app.mode
+                {
+                    *selected_index =
+                        offset_index(*selected_index, file_list.len().saturating_sub(1), delta);
                 }
             } else if contains(layout.graph, x, y) && matches!(app.mode, AppMode::Normal) {
                 app.move_selection(delta);

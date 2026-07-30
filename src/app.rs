@@ -667,6 +667,8 @@ impl App {
         }
 
         self.perf.record("refresh", refresh_started.elapsed());
+        self.pending_refresh = false;
+        self.last_refresh_time = Instant::now();
 
         Ok(())
     }
@@ -748,7 +750,7 @@ impl App {
     }
 
     /// Check if async fetch has completed and process the result
-    pub fn update_fetch_status(&mut self) {
+    pub fn update_fetch_status(&mut self, allow_refresh: bool) {
         let Some(rx) = &self.fetch_receiver else {
             return;
         };
@@ -763,10 +765,7 @@ impl App {
         match fetch_result {
             Ok(()) => {
                 self.reset_timers();
-                if matches!(
-                    self.mode,
-                    AppMode::FileSelect { .. } | AppMode::FileDiff { .. }
-                ) {
+                if !allow_refresh || self.repository_refresh_is_paused() {
                     self.pending_refresh = true;
                     self.set_message("Fetched from origin");
                 } else {
@@ -792,7 +791,7 @@ impl App {
     }
 
     /// Check if async push has completed and process the result
-    pub fn update_push_status(&mut self) {
+    pub fn update_push_status(&mut self, allow_refresh: bool) {
         let Some(rx) = &self.push_receiver else {
             return;
         };
@@ -805,7 +804,9 @@ impl App {
             Ok(()) => {
                 self.set_message("Pushed to origin");
                 self.reset_timers();
-                if let Err(e) = self.refresh(true) {
+                if !allow_refresh || self.repository_refresh_is_paused() {
+                    self.pending_refresh = true;
+                } else if let Err(e) = self.refresh(true) {
                     self.show_error(format!("Refresh failed: {e}"));
                 }
             }
@@ -833,16 +834,11 @@ impl App {
         if self.is_fetching() {
             return;
         }
-        // A synchronous refresh would delay any queued input by its full
-        // duration (perceived as a slow click); let input win and retry on
-        // the next tick.
-        if crossterm::event::poll(Duration::ZERO).unwrap_or(false) {
+        if self.repository_refresh_is_paused() {
             return;
         }
-        if matches!(
-            self.mode,
-            AppMode::FileSelect { .. } | AppMode::FileDiff { .. }
-        ) {
+        if self.pending_refresh {
+            self.apply_pending_refresh();
             return;
         }
 
@@ -863,10 +859,17 @@ impl App {
                 >= refresh_config.refresh_interval
         {
             if let Err(e) = self.refresh(false) {
+                self.last_refresh_time = now;
                 self.set_message(format!("Auto-refresh failed: {e}"));
             }
-            self.last_refresh_time = now;
         }
+    }
+
+    fn repository_refresh_is_paused(&self) -> bool {
+        matches!(
+            self.mode,
+            AppMode::FileSelect { .. } | AppMode::FileDiff { .. }
+        )
     }
 
     /// Start fetch in background
@@ -1675,11 +1678,16 @@ impl App {
 
     fn return_to_normal(&mut self) {
         self.mode = AppMode::Normal;
-        if self.pending_refresh {
+    }
+
+    fn apply_pending_refresh(&mut self) {
+        if !self.pending_refresh {
+            return;
+        }
+        if let Err(e) = self.refresh(true) {
             self.pending_refresh = false;
-            if let Err(e) = self.refresh(true) {
-                self.set_message(format!("Refresh failed: {e}"));
-            }
+            self.last_refresh_time = Instant::now();
+            self.set_message(format!("Refresh failed: {e}"));
         }
     }
 
@@ -2639,5 +2647,95 @@ mod tests {
             .nodes
             .first()
             .is_some_and(|node| node.is_uncommitted));
+    }
+
+    #[test]
+    fn fetch_completion_defers_only_the_repository_refresh_during_input() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let repo = Repository::init(tempdir.path()).unwrap();
+        commit_file(&repo, "tracked.txt", "tracked\n", "initial");
+        let mut app = make_app_from_repo(GitRepository::open(tempdir.path()).unwrap());
+        let (sender, receiver) = mpsc::channel();
+        app.fetch_receiver = Some(receiver);
+        sender.send(Ok(())).unwrap();
+
+        app.update_fetch_status(false);
+
+        assert!(!app.is_fetching());
+        assert!(app.pending_refresh);
+        assert_eq!(app.message.as_deref(), Some("Fetched from origin"));
+    }
+
+    #[test]
+    fn push_completion_defers_the_repository_refresh_in_file_select() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let repo = Repository::init(tempdir.path()).unwrap();
+        commit_file(&repo, "tracked.txt", "tracked\n", "initial");
+        let mut app = make_app_from_repo(GitRepository::open(tempdir.path()).unwrap());
+        app.mode = AppMode::FileSelect {
+            selected_index: 0,
+            file_list: Vec::new(),
+        };
+        let (sender, receiver) = mpsc::channel();
+        app.push_receiver = Some(receiver);
+        app.set_message("Pushing...");
+        sender.send(Ok(())).unwrap();
+
+        app.update_push_status(true);
+
+        assert!(!app.is_pushing());
+        assert!(app.pending_refresh);
+        assert_eq!(app.message.as_deref(), Some("Pushed to origin"));
+    }
+
+    #[test]
+    fn return_to_normal_keeps_a_pending_refresh_deferred() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let repo = Repository::init(tempdir.path()).unwrap();
+        commit_file(&repo, "tracked.txt", "tracked\n", "initial");
+        let mut app = make_app_from_repo(GitRepository::open(tempdir.path()).unwrap());
+        app.mode = AppMode::FileSelect {
+            selected_index: 0,
+            file_list: Vec::new(),
+        };
+        app.pending_refresh = true;
+
+        app.handle_action(Action::Cancel).unwrap();
+
+        assert!(matches!(app.mode, AppMode::Normal));
+        assert!(app.pending_refresh);
+        assert!(app.perf.ops().all(|(name, _)| name != "refresh"));
+    }
+
+    #[test]
+    fn pending_refresh_is_applied_once() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let repo = Repository::init(tempdir.path()).unwrap();
+        commit_file(&repo, "tracked.txt", "tracked\n", "initial");
+        let mut app = make_app_from_repo(GitRepository::open(tempdir.path()).unwrap());
+        app.pending_refresh = true;
+
+        app.check_auto_refresh();
+
+        assert!(!app.pending_refresh);
+        let refresh_count = app
+            .perf
+            .ops()
+            .find(|(name, _)| *name == "refresh")
+            .unwrap()
+            .1
+            .count;
+
+        app.check_auto_refresh();
+
+        assert_eq!(
+            app.perf
+                .ops()
+                .find(|(name, _)| *name == "refresh")
+                .unwrap()
+                .1
+                .count,
+            refresh_count
+        );
     }
 }
