@@ -40,6 +40,7 @@ pub enum Action {
     Search,
     Refresh,
     ToggleRemoteBranches,
+    ToggleTags,
     Quit,
 
     // Dialogs

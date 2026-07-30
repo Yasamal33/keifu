@@ -34,6 +34,16 @@ show_remote_branches = false
 
 Press `o` in the TUI to toggle remote branches for the current session.
 
+By default, keifu shows tag labels on commits. You can hide them by default:
+
+```toml
+[graph]
+# Show tag labels by default (default: true)
+show_tags = false
+```
+
+Press `t` in the TUI to toggle tags for the current session.
+
 ### Options
 
 | Key | Type | Default | Description |
@@ -43,6 +53,7 @@ Press `o` in the TUI to toggle remote branches for the current session.
 | `auto_fetch` | bool | `true` | Enable auto-fetch from origin |
 | `fetch_interval` | integer | `60` | Interval in seconds for remote fetch (minimum: 10) |
 | `graph.show_remote_branches` | bool | `true` | Show remote branches and commits reachable only from remote branches |
+| `graph.show_tags` | bool | `true` | Show tag labels on commits |
 
 ### Disabling auto-refresh
 

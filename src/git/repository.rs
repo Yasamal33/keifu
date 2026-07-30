@@ -9,7 +9,7 @@ use git2::{BranchType, Repository, Status};
 
 use git2::Oid;
 
-use super::{BranchInfo, CommitDiffInfo, CommitInfo};
+use super::{BranchInfo, CommitDiffInfo, CommitInfo, TagInfo};
 
 pub struct GitRepository {
     pub repo: Repository,
@@ -88,6 +88,10 @@ impl GitRepository {
     /// Get branch list
     pub fn get_branches(&self, include_remotes: bool) -> Result<Vec<BranchInfo>> {
         BranchInfo::list_all(&self.repo, include_remotes)
+    }
+
+    pub fn get_tags(&self) -> Result<Vec<TagInfo>> {
+        TagInfo::list_all(&self.repo)
     }
 
     /// Get the current HEAD name
@@ -247,5 +251,46 @@ impl WorkingTreeStatus {
 
     pub fn is_precise_cache_key(&self) -> bool {
         !self.has_collapsed_untracked_dirs
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use git2::Signature;
+    use tempfile::TempDir;
+
+    use super::*;
+
+    fn init_repo_with_commit() -> (TempDir, GitRepository) {
+        let tempdir = tempfile::tempdir().unwrap();
+        let repo = Repository::init(tempdir.path()).unwrap();
+        fs::write(tempdir.path().join("base.txt"), "base\n").unwrap();
+        let mut index = repo.index().unwrap();
+        index.add_path(Path::new("base.txt")).unwrap();
+        index.write().unwrap();
+        let tree_id = index.write_tree().unwrap();
+        let tree = repo.find_tree(tree_id).unwrap();
+        let sig = Signature::now("Test", "test@example.com").unwrap();
+        repo.commit(Some("HEAD"), &sig, &sig, "init", &tree, &[])
+            .unwrap();
+        drop(tree);
+        let git_repo = GitRepository::open(tempdir.path()).unwrap();
+        (tempdir, git_repo)
+    }
+
+    #[test]
+    fn get_tags_delegates_to_tag_info_list_all() {
+        let (_tempdir, repo) = init_repo_with_commit();
+        let head_oid = repo.head_oid().unwrap();
+        let target = repo.repo.find_object(head_oid, None).unwrap();
+        repo.repo.tag_lightweight("v1.0.0", &target, false).unwrap();
+
+        let tags = repo.get_tags().unwrap();
+
+        assert_eq!(tags.len(), 1);
+        assert_eq!(tags[0].name, "v1.0.0");
+        assert_eq!(tags[0].tip_oid, head_oid);
     }
 }
